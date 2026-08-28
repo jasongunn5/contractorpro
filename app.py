@@ -52,20 +52,55 @@ def jobs():
     job_rows = ""
 
     for job in jobs:
+
+        status_options = ""
+
+        statuses = ['New', 'Accepted', 'In Progress', 'Completed', 'Invoiced', 'Paid']
+
+        for status in statuses:
+
+            selected = ""
+
+            if job['status'] == status:
+                selected = "selected"
+
+            status_options += f"""
+            <option value="{status}" {selected}>{status}</option>
+            """
+
         job_rows += f"""
         <tr>
-            <td>{job['client_name']}</td>
-            <td>{job['service_type']}</td>
-            <td>{job['location']}</td>
-            <td>${job['price']:.2f}</td>
-            <td>{job['status']}</td>
-        </tr>
-        """
 
-    if not job_rows:
-        job_rows = """
-        <tr>
-            <td colspan="5">No jobs yet.</td>
+            <td>{job['id']}</td>
+
+            <td>{job['client_name']}</td>
+
+            <td>{job['service_type']}</td>
+
+            <td>{job['location'] or ''}</td>
+
+            <td>${job['price']:.2f}</td>
+
+            <td>
+
+                <form method="POST"
+                action="/jobs/{job['id']}/status">
+                    
+                
+                    <select name="status">
+
+                        {status_options}
+
+                    </select>
+
+                    <button type="submit">
+                        Update
+                    </button>
+
+                </form>
+            
+            </td>
+
         </tr>
         """
 
@@ -146,6 +181,24 @@ def jobs():
 
     </html>
     """
+
+@app.route('/jobs/<int:job_id>/status', methods=['POST'])
+def update_job_status(job_id):
+    new_status = request.form.get('status')
+
+    alowed_statuses = ['New', 'Accepted', 'In Progress', 'Completed', 'Invoiced', 'Paid']
+
+    if new_status not in alowed_statuses:
+        return "Invalid status", 400
+
+    db = get_db()
+
+    db.execute('UPDATE jobs SET status = ? WHERE id = ?', (new_status, job_id))
+
+    db.commit()
+    db.close()
+
+    return redirect('/jobs')
 
 
 @app.route('/jobs/add', methods=['GET', 'POST'])
