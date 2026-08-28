@@ -27,20 +27,216 @@ def create_database():
 
 @app.route('/')
 def dashboard():
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>ContractorPro</title>
-    </head>
-    <body>
-        <h1>ContractorPro Dashboard</h1>
-        <p>The Dashboard route is working.</p>
+    db = get_db()
+    total_jobs = db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+    active_jobs = db.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('New', 'Accepted', 'In Progress')").fetchone()[0]
+    completed_jobs = db.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('Completed', 'Invoiced', 'Paid')").fetchone()[0]
+    total_contract_value = db.execute("""SELECT COALESCE(SUM(price), 0) FROM jobs""").fetchone()[0]
+    paid_revenue = db.execute("""SELECT COALESCE(SUM(price), 0) FROM jobs WHERE status = 'Paid'""").fetchone()[0]
+    recent_jobs = db.execute("SELECT * FROM jobs ORDER BY id DESC LIMIT 5").fetchall()
+    db.close()
 
-        <a href="/jobs/add">+ New Job</a>
-    </body>
-    </html>
-    """
+    recent_rows = ""
+
+    for job in recent_jobs:
+        recent_rows += f"""
+        <tr>
+            <td>{job['id']}</td>
+            <td>{job['client_name']}</td>
+            <td>{job['service_type']}</td>
+            <td>${job['price']:.2f}</td>
+            <td>{job['status']}</td>
+        </tr>
+        """
+
+        if not recent_rows:
+            recent_rows = """
+            <tr>
+                <td colspan="5">
+                    No recent jobs have been created yet.
+                </td>
+            </tr>
+            """
+
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>ContractorPro Dashboard</title>
+
+            <style>
+                body {{
+                        font-family: Arial, sans-serif;
+                        margin: 0;
+                        background: #f4f6f8;
+                    }}
+
+                    nav {{
+                        background: #111827;
+                        color: white;
+                        padding: 18px 40px;
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: center;
+                    }}
+
+                    nav h2 {{
+                        margin: 0;
+                    }}
+
+                    nav a {{
+                        color: white;
+                        text-decoration: none;
+                        margin-left: 18px;
+                    }}
+                    
+                    .new-job {{
+                        background: #16a34a;
+                        padding: 10px 16px;
+                        border-radius: 6px;
+                    }}
+
+                    .container {{
+                        max-width: 1150px;
+                        margin: 40px auto;
+                        padding: 0 20px;
+                    }}
+
+                    .cards {{
+                        display: grid;
+                        grid-template-columns: repeat(5, 1fr);
+                        gap: 16px;
+                        margin: 30px 0 40px;
+                    }}
+
+                    .card {{
+                        background: white;
+                        padding: 22px;
+                        border-radius: 10px;
+                        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
+                    }}
+
+                    .card h3 {{
+                        margin-top: 0;
+                        font-size: 15px;
+                        color: #4b5563;
+                    }}
+
+                    .card h2 {{
+                        margin-bottom: 0;
+                        font-size: 30px;
+                    }}
+
+                    table {{
+                        width: 100%;
+                        background: white;
+                        border-collapse: collapse;
+                    }}
+
+                    th,
+                    td {{
+                        padding: 14px;
+                        border-bottom: 1px solid #ddd;
+                        text-align: left;
+                    }}
+
+                    th {{
+                        background: #1f2937;
+                        color: white;
+                    }}
+
+                    .section-header {{
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: center;
+                    }}
+
+                    .button {{
+                        background: #2563eb;
+                        color: white;
+                        padding: 10px 15px;
+                        border-radius: 6px;
+                        text-decoration: none;
+                    }}
+
+                </style>
+
+            </head>
+
+            <body>
+
+                <nav>
+                    <h2>ContractorPro</h2>
+
+                    <div>
+                        <a href="/">Dashboard</a>
+                        <a href="/jobs">Jobs</a>
+                        <a href="/jobs/add" class="new-job">+ New Job</a>
+                    </div>
+                </nav>
+
+                <div class="container">
+
+                    <h1>Contractor Dashboard</h1>
+
+                    <p>
+                        Independent contractor operations and revenue overview
+                    </p>
+
+                    <div class="cards">
+
+                        <div class="card">
+                            <h3>Total Jobs</h3>
+                            <h2>{total_jobs}</h2>
+                        </div>
+
+                        <div class="card">
+                            <h3>Active Jobs</h3>
+                            <h2>{active_jobs}</h2>
+                        </div>
+
+                        <div class="card">
+                            <h3>Completed Jobs</h3>
+                            <h2>{completed_jobs}</h2>
+                        </div>
+
+                        <div class="card">
+                            <h3>Contract Value</h3>
+                            <h2>${total_contract_value:.2f}</h2>
+                        </div>
+
+                        <div class="card">
+                            <h3>Paid Revenue</h3>
+                            <h2>${paid_revenue:.2f}</h2>
+                        </div>
+
+                    </div>
+
+                    <div class="section-header">
+                        <h2>Recent Jobs</h2>
+                        <a href="/jobs" class="button">View All Jobs</a>
+                    </div>
+
+                    <table>
+
+                        <tr>
+                            <th>ID</th>
+                            <th>Client</th>
+                            <th>Service</th>
+                            <th>Value</th>
+                            <th>Status</th>
+                        </tr>
+
+                        {recent_rows}
+                    
+                    </table>
+
+                </div>
+
+            </body>
+            </html>
+            """
+                        
 
 @app.route('/jobs')
 def jobs():
@@ -493,4 +689,4 @@ if __name__ == '__main__':
 
     app.run(
         debug=True, port=5001
-    )
+)
