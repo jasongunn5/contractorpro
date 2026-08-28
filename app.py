@@ -100,6 +100,28 @@ def jobs():
                 </form>
             
             </td>
+            <td>
+
+                <a href="/jobs/{job['id']}/edit">
+                    Edit
+                </a>
+
+                &nbsp;
+
+                <form
+                    method="POST"
+                    action="/jobs/{job['id']}/delete"
+                    style="display: inline;"
+                    onsubmit="return confirm('Delete this job?');"
+                >
+
+                    <button type="submit">
+                        Delete
+                    </button>
+
+                </form>
+
+            </td>
 
         </tr>
         """
@@ -171,6 +193,7 @@ def jobs():
                 <th>Location</th>
                 <th>Price</th>
                 <th>Status</th>
+                <th>Actions</th>
             </tr>
 
             {job_rows}
@@ -181,6 +204,7 @@ def jobs():
 
     </html>
     """
+
 
 @app.route('/jobs/<int:job_id>/status', methods=['POST'])
 def update_job_status(job_id):
@@ -198,6 +222,90 @@ def update_job_status(job_id):
     db.commit()
     db.close()
 
+    return redirect('/jobs')
+
+
+@app.route('/jobs/<int:job_id>/edit', methods=['GET', 'POST'])
+def edit_job(job_id):
+    db = get_db()
+
+    job = db.execute('SELECT * FROM jobs WHERE id = ?', (job_id,)).fetchone()
+
+    if job is None:
+        db.close()
+        return "Job not found", 404
+
+    if request.method == 'POST':
+        client_name = request.form['client_name']
+        service_type = request.form['service_type']
+        location = request.form.get('location', '')
+        price = float(request.form.get('price', 0))
+
+        db.execute('''
+            UPDATE jobs
+            SET client_name = ?, service_type = ?, location = ?, price = ?
+            WHERE id = ?
+        ''', (client_name, service_type, location, price, job_id))
+        db.commit()
+        db.close()
+        return redirect('/jobs')
+
+    db.close()
+
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Edit Job</title>
+    </head>
+    <body style="font-family: Arial, max-width: 700px; margin: 40px auto;">
+        <h1>Edit Job #{job['id']}</h1>
+        <form method="POST">
+            <label>Client / Company</label><br>
+            <input
+                name="client_name"
+                value="{job['client_name']}"
+                required
+                style="width: 100%; padding: 10px; margin: 8px 0 18px;"
+            >
+            <label>Service Type</label><br>
+            <input
+                name="service_type"
+                value="{job['service_type']}"
+                required
+                style="width: 100%; padding: 10px; margin: 8px 0 18px;"
+            >
+            <label>Service Location</label><br>
+            <input
+                name="location"
+                value="{job['location'] or ''}"
+                style="width: 100%; padding: 10px; margin: 8px 0 18px;"
+            >
+            <label>Contract Amount</label><br>
+            <input
+                type="number"
+                step="0.01"
+                name="price"
+                value="{job['price']}"
+                style="width: 100%; padding: 10px; margin: 8px 0 18px;"
+            >
+            <button type="submit">
+                Save
+            </button>
+        </form>
+        <p>
+            <a href="/jobs">Back to Jobs</a>
+        </p>
+    </body>
+    </html>
+    """
+
+@app.route('/jobs/<int:job_id>/delete', methods=['POST'])
+def delete_job(job_id):
+    db = get_db()
+    db.execute('DELETE FROM jobs WHERE id = ?', (job_id,))
+    db.commit()
+    db.close()
     return redirect('/jobs')
 
 
@@ -384,5 +492,5 @@ if __name__ == '__main__':
     create_database()
 
     app.run(
-        debug=True
+        debug=True, port=5001
     )
