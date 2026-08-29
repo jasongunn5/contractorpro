@@ -22,8 +22,20 @@ def create_database():
         price REAL DEFAULT 0,
         status TEXT DEFAULT 'New'
     )''')
+
+    db.execute('''CREATE TABLE IF NOT EXISTS clients (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_name TEXT NOT NULL,
+        contact_name TEXT,
+        email TEXT,
+        phone TEXT,
+        billing_address TEXT,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
     db.commit()
     db.close()
+
 
 @app.route('/')
 def dashboard():
@@ -682,6 +694,191 @@ def add_job():
 
     </html>
     """
+
+@app.route('/clients')
+def clients():
+    db = get_db()
+
+    all_clients = db.execute("SELECT * FROM clients ORDER BY created_at DESC").fetchall()
+    db.close()
+
+    rows = ""
+
+    for client in all_clients:
+        rows += f"""
+        <tr>
+            <td>{client['id']}</td>
+            <td>{client['company_name']}</td>
+            <td>{client['contact_name'] or ''}</td>
+            <td>{client['email'] or ''}</td>
+            <td>{client['phone'] or ''}</td>
+        </tr>
+        """
+
+    if not rows:
+        rows = """
+        <tr>
+            <td colspan="5">
+                No clients have been added yet.
+            </td>
+        </tr>
+        """
+
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>ContractorPro Clients</title>
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                background: #f4f6f8;
+                margin: 0;
+            }}
+
+            .container {{
+                max-width: 1100px;
+                margin: 40px auto;
+                padding: 0 20px;
+            }}
+
+            table {{
+                width: 100%;
+                background: white;
+                border-collapse: collapse;
+            }}
+
+            th,
+            td {{
+                padding: 14px;
+                border-bottom: 1px solid #ddd;
+                text-align: left;
+            }}
+
+            th {{
+                background: #111827;
+                color: white;
+            }}
+
+            a {{
+                margin-right: 15px;
+            }} 
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Clients</h1>
+            <p>
+                <a href="/">Dashboard</a>
+                <a href="/jobs">Jobs</a>
+                <a href="/clients/add">+ New Client</a>
+            </p>
+
+            <table>
+                <tr>
+                    <th>ID</th>
+                    <th>Company</th>
+                    <th>Contact</th>
+                    <th>Email</th>
+                    <th>Phone</th>
+                </tr>
+
+                {rows}
+            </table>
+
+        </div>
+    </body>
+    </html>
+    """
+
+@app.route('/clients/add', methods=['GET', 'POST'])
+def add_client():
+    if request.method == 'POST':
+        company_name = request.form['company_name']
+        contact_name = request.form.get('contact_name', '')
+        email = request.form.get('email', '')
+        phone = request.form.get('phone', '')
+        billing_address = request.form.get('billing_address', '')
+        notes = request.form.get('notes', '')
+
+        db = get_db()
+        db.execute('''
+            INSERT INTO clients (company_name, contact_name, email, phone, billing_address, notes)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (company_name, contact_name, email, phone, billing_address, notes))
+        db.commit()
+        db.close()
+
+        return redirect('/clients')
+
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Add Client</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f4f6f8;
+        }
+
+        .container {
+            max-width: 700px;
+            margin: 50px auto;
+            padding: 30px;
+            background: white;
+            border-radius: 10px;
+        }
+
+        input, textarea {
+            width: 100%;
+            padding: 12px;
+            margin-top: 6px;
+            margin-bottom: 18px;
+            box-sizing: border-box;
+        }
+
+        button {
+            background-color: #16a34a;
+            color: white;
+            border: none;
+            padding: 13px 22px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Add Client</h1>
+        <p>
+            <a href="/clients">Back to Clients</a>
+        </p>
+        <form method="POST">
+            <label>Company Name</label>
+            <input type="text" name="company_name" required>
+
+            <label>Contact Name</label>
+            <input type="text" name="contact_name">
+
+            <label>Email</label>
+            <input type="email" name="email">
+
+            <label>Phone</label>
+            <input type="text" name="phone">
+
+            <label>Billing Address</label>
+            <textarea name="billing_address"></textarea>
+
+            <label>Notes</label>
+            <textarea name="notes"></textarea>
+
+            <button type="submit">Save Client</button>
+        </form>
+    </div>
+</body>
+</html>
+"""
 
 if __name__ == '__main__':
 
