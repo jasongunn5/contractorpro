@@ -23,6 +23,11 @@ def create_database():
         status TEXT DEFAULT 'New'
     )''')
 
+    try:
+        db.execute('''ALTER TABLE jobs ADD COLUMN client_id INTEGER''')
+    except sqlite3.OperationalError:
+        pass
+
     db.execute('''CREATE TABLE IF NOT EXISTS clients (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         company_name TEXT NOT NULL,
@@ -520,23 +525,47 @@ def delete_job(job_id):
 @app.route('/jobs/add', methods=['GET', 'POST'])
 def add_job():
     if request.method == 'POST':
-        client_name = request.form['client_name']
-        service_type = request.form['service_type']
+        client_id = request.form["client_id"]
+
+        service_type = request.form["service_type"]
         description = request.form.get("description", "")
         location = request.form.get("location", "")
-        price = float(request.form.get("price", 0) or 0)
-        status = request.form.get("status", "New")
+        price = request.form.get("price", 0)
 
-        
         db = get_db()
-        db.execute('''
-            INSERT INTO jobs (client_name, service_type, description, location, price, status)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (client_name, service_type, description, location, price, status))
+
+        client = db.execute("SELECT company_name FROM clients WHERE id = ?", (client_id,)).fetchone()
+
+        if client is None:
+            db.close()
+            return "Client not found", 404
+
+        client_name = client["company_name"]
+
+        db.execute("""
+            INSERT INTO jobs (client_name, client_id, service_type, description, location, price, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (client_name, client_id, service_type, description, location, float(price), 'New'))
+
         db.commit()
         db.close()
 
-        return redirect('/jobs')
+        return redirect("/jobs")
+
+    db = get_db()
+
+    clients = db.execute("SELECT * FROM clients ORDER BY created_at DESC").fetchall()
+
+    db.close()
+
+    client_options = ""
+
+    for client in clients:
+        client_options += f"""
+        <option value="{client['id']}">
+            {client['company_name']}
+        </option>
+        """
 
     return f"""
     <!DOCTYPE html>
@@ -605,12 +634,12 @@ def add_job():
             
             <label> Client / Company </label>
 
-            <input
-                type="text"
-                id="client_name"
-                name="client_name"
-                required>
-            
+            <select
+                name="client_id"
+                required
+            >
+                {client_options}
+            </select>
 
                 <label>
                     Service Type
@@ -708,14 +737,22 @@ def clients():
         rows += f"""
         <tr>
             <td>{client['id']}</td>
-            <td>{client['company_name']}</td>
+            
+            <td>
+                <a href="/clients/{client['id']}">
+                    {client['company_name']}
+                </a>
+            </td>
+
             <td>{client['contact_name'] or ''}</td>
             <td>{client['email'] or ''}</td>
             <td>{client['phone'] or ''}</td>
 
             <td>
                 <a href="/clients/{client['id']}/edit">Edit</a>
+                
                 &nbsp;
+
                 <form
                     method="POST"
                     action="/clients/{client['id']}/delete"
@@ -986,6 +1023,140 @@ def delete_client(client_id):
     db.close()
     return redirect('/clients')
 
+@app.route('/clients/<int:client_id>')
+def client_detail(client_id):
+    db = get_db()
+    client = db.execute('SELECT * FROM clients WHERE id = ?', (client_id,)).fetchone()
+
+    if client is None:
+        db.close()
+        return "Client not found", 404
+
+    jobs = db.execute('SELECT * FROM jobs WHERE client_id = ? ORDER BY id DESC', (client_id,)).fetchall()
+
+    total_value = db.execute("""SELECT COALESCE(SUM(price), 0) FROM jobs WHERE client_id = ?""", (client_id,)).fetchone()[0]
+
+    paid_revenue = db.execute("""SELECT COALESCE(SUM(price), 0) FROM jobs WHERE client_id = ? AND status = 'Paid'""", (client_id,)).fetchone()[0]
+
+    db.close()
+
+    job_rows = ""
+
+    for job in jobs:
+        job_rows += f"""
+        <tr>
+            <td>{job['id']}</td>
+            <td>{job['service_type']}</td>
+            <td>{job['location'] or ''}</td>
+            <td>${job['price']:.2f}</td>
+            <td>{job['status']}</td>
+        </tr>
+        """
+
+    if not job_rows:
+        job_rows = """
+        <tr>
+            <td colspan="5">
+                No linked jobs yet.
+            </td>
+        </tr>
+        """
+
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>{client['company_name']} - ContractorPro</title>
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                background: #f4f6f8;
+                margin: 0;
+            }}
+
+            .container {{
+                max-width: 1050px;
+                margin: 40px auto;
+                padding: 0 20px;
+            }}
+
+            .card {{
+                padding: 20px;
+                background: white;
+                border-radius: 8px;
+            }}
+
+            table {{
+                width: 100%;
+                background: white;
+                border-collapse: collapse;
+            }}
+
+            th, td {{
+                padding: 14px;
+                border-bottom: 1px solid #ddd;
+                text-align: left;
+            }}
+
+            th {{
+                background: #111827;
+                color: white;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <p>
+                <a href="/clients">Back to Clients</a>
+            </p>
+
+            <h1>{client['company_name']}</h1>
+
+            <p>
+                Contact: {client['contact_name'] or '-'}<br>
+                Email: {client['email'] or '-'}<br>
+                Phone: {client['phone'] or '-'}
+            </p>
+
+            <div class="cards">
+
+                <div class="card">
+                    <h3>Linked Jobs</h3>
+                    <h2>{len(jobs)}</h2>
+                </div>
+
+                <div class="card">
+                    <h3>Contract Value</h3>
+                    <h2>${total_value:.2f}</h2>
+                </div>
+
+                <div class="card">
+                    <h3>Paid Revenue</h3>
+                    <h2>${paid_revenue:.2f}</h2>
+                </div>
+
+            </div>
+
+            <h2>Job History</h2>
+
+            <table>
+            
+                <tr>
+                    <th>ID</th>
+                    <th>Service</th>
+                    <th>Location</th>
+                    <th>Value</th>
+                    <th>Status</th>
+                </tr>
+
+                {job_rows}
+
+            </table>
+
+        </div>
+    </body>
+    </html>
+    """
 
 if __name__ == '__main__':
 
