@@ -712,6 +712,21 @@ def clients():
             <td>{client['contact_name'] or ''}</td>
             <td>{client['email'] or ''}</td>
             <td>{client['phone'] or ''}</td>
+
+            <td>
+                <a href="/clients/{client['id']}/edit">Edit</a>
+                &nbsp;
+                <form
+                    method="POST"
+                    action="/clients/{client['id']}/delete"
+                    style="display: inline;"
+                    onsubmit="return confirm('Delete this client?');"
+                >
+                    <button type="submit">
+                        Delete
+                    </button>
+                </form>
+            </td>
         </tr>
         """
 
@@ -781,6 +796,7 @@ def clients():
                     <th>Contact</th>
                     <th>Email</th>
                     <th>Phone</th>
+                    <th>Actions</th>
                 </tr>
 
                 {rows}
@@ -879,6 +895,97 @@ def add_client():
 </body>
 </html>
 """
+
+@app.route('/clients/<int:client_id>/edit', methods=['GET', 'POST'])
+def edit_client(client_id):
+    db = get_db()
+    client = db.execute('SELECT * FROM clients WHERE id = ?', (client_id,)).fetchone()
+
+    if client is None:
+        db.close()
+        return "Client not found", 404
+
+    if request.method == 'POST':
+        company_name = request.form['company_name']
+        contact_name = request.form.get('contact_name', '')
+        email = request.form.get('email', '')
+        phone = request.form.get('phone', '')
+        billing_address = request.form.get('billing_address', '')
+        notes = request.form.get('notes', '')
+
+        db.execute('''
+            UPDATE clients
+            SET company_name = ?, contact_name = ?, email = ?, phone = ?, billing_address = ?, notes = ?
+            WHERE id = ?
+        ''', (company_name, contact_name, email, phone, billing_address, notes, client_id))
+        db.commit()
+        db.close()
+        return redirect('/clients')
+
+    db.close()
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Edit Client</title>
+    </head>
+    <body style="font-family: Arial, max-width: 700px; margin: 40px auto;">
+        <h1>Edit Client #{client['id']}</h1>
+        <form method="POST">
+            <label>Company Name</label><br>
+            <input
+                name="company_name"
+                value="{client['company_name']}"
+                required
+                style="width: 100%; padding: 10px; margin: 8px 0 18px;"
+            >
+            <label>Contact Name</label><br>
+            <input
+                name="contact_name"
+                value="{client['contact_name'] or ''}"
+                style="width: 100%; padding: 10px; margin: 8px 0 18px;"
+            >
+            <label>Email</label><br>
+            <input
+                name="email"
+                value="{client['email'] or ''}"
+                style="width: 100%; padding: 10px; margin: 8px 0 18px;"
+            >
+            <label>Phone</label><br>
+            <input
+                name="phone"
+                value="{client['phone'] or ''}"
+                style="width: 100%; padding: 10px; margin: 8px 0 18px;"
+            >
+            <label>Billing Address</label><br>
+            <textarea
+                name="billing_address"
+                style="width: 100%; padding: 10px; margin: 8px 0 18px;"
+            >{client['billing_address'] or ''}</textarea>
+            <label>Notes</label><br>
+            <textarea
+                name="notes"
+                style="width: 100%; padding: 10px; margin: 8px 0 18px;"
+            >{client['notes'] or ''}</textarea>
+            <button type="submit">
+                Save Changes
+            </button>
+        </form>
+        <p>
+            <a href="/clients">Back to Clients</a>
+        </p>
+    </body>
+    </html>
+    """
+
+@app.route('/clients/<int:client_id>/delete', methods=['POST'])
+def delete_client(client_id):
+    db = get_db()
+    db.execute('DELETE FROM clients WHERE id = ?', (client_id,))
+    db.commit()
+    db.close()
+    return redirect('/clients')
+
 
 if __name__ == '__main__':
 
