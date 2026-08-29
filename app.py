@@ -286,8 +286,141 @@ def dashboard():
             </body>
             </html>
             """
-                        
 
+
+@app.route("/financials")
+def financials():
+    db = get_db()
+
+    total_contract_value = db.execute("""SELECT COALESCE(SUM(price), 0) FROM jobs""").fetchone()[0]
+    paid_revenue = db.execute("""SELECT COALESCE(SUM(price), 0) FROM jobs WHERE status = 'Paid'""").fetchone()[0]
+    total_expenses = db.execute("""SELECT COALESCE(SUM(expenses), 0) FROM jobs""").fetchone()[0]
+    total_mileage = db.execute("""SELECT COALESCE(SUM(mileage), 0) FROM jobs""").fetchone()[0]
+    
+
+    db.close()
+
+    outstanding_revenue = total_contract_value - paid_revenue
+    net_profit = total_contract_value - total_expenses
+
+    if total_contract_value > 0:
+        profit_margin = (net_profit / total_contract_value) * 100
+    else:
+        profit_margin = 0
+
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>ContractorPro Financials</title>
+
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                background: #f4f6f8;
+                margin: 0;
+            }}
+
+            nav {{
+                background: #111827;
+                color: white;
+                padding: 18px 40px;
+            }}
+
+            nav a {{
+                color: white;
+                text-decoration: none;
+                margin-right: 20px;
+            }}
+
+            .container {{
+                max-width: 1100px;
+                margin: 40px auto;
+                padding: 0 20px;
+            }}
+
+            .cards {{
+                display: grid;
+                grid-template-columns: repeat(4, 1fr);
+                gap: 18px;
+            }}
+
+            .card {{
+                background: white;
+                padding: 22px;
+                border-radius: 8px;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            }}
+
+            .card h3 {{
+                margin-top: 0;
+                font-size: 15px;
+            }}
+
+            .card h2 {{
+                margin-bottom: 0;
+            }}
+
+        </style>
+    </head>
+    <body>
+        <nav>
+            <a href="/">Dashboard</a>
+            <a href="/jobs">Jobs</a>
+            <a href="/clients">Clients</a>
+            <a href="/financials">Financials</a>
+        </nav>
+        <div class="container">
+
+            <h1>Financials</h1>
+
+            <p>Contractor revenue, expenses, and profit overview</p>
+
+            <div class="cards">
+
+                <div class="card">
+                    <h3>Contract Value</h3>
+                    <h2>${total_contract_value:.2f}</h2>
+                </div>
+
+                <div class="card">
+                    <h3>Paid Revenue</h3>
+                    <h2>${paid_revenue:.2f}</h2>
+                </div>
+
+                <div class="card">
+                    <h3>Outstanding Revenue</h3>
+                    <h2>${outstanding_revenue:.2f}</h2>
+                </div>
+
+                <div class="card">
+                    <h3>Total Expenses</h3>
+                    <h2>${total_expenses:.2f}</h2>
+                </div>
+
+                <div class="card">
+                    <h3>Net Profit</h3>
+                    <h2>${net_profit:.2f}</h2>
+                </div>
+
+                <div class="card">
+                    <h3>Profit Margin</h3>
+                    <h2>{profit_margin:.2f}%</h2>
+                </div>
+            
+                <div class="card">
+                    <h3>Business Mileage</h3>
+                    <h2>{total_mileage:.1f}</h2>
+                </div>
+            
+            </div>
+
+        </div>
+
+    </body>
+    </html>
+    """
+    
 @app.route('/jobs')
 def jobs():
 
