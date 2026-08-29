@@ -28,6 +28,21 @@ def create_database():
     except sqlite3.OperationalError:
         pass
 
+    try:
+        db.execute("""ALTER TABLE jobs ADD COLUMN mileage REAL DEFAULT 0""")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        db.execute("""ALTER TABLE jobs ADD COLUMN expenses REAL DEFAULT 0""")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        db.execute("""ALTER TABLE jobs ADD COLUMN notes_financial TEXT""")
+    except sqlite3.OperationalError:
+        pass
+
     db.execute('''CREATE TABLE IF NOT EXISTS clients (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         company_name TEXT NOT NULL,
@@ -51,6 +66,9 @@ def dashboard():
     total_contract_value = db.execute("""SELECT COALESCE(SUM(price), 0) FROM jobs""").fetchone()[0]
     paid_revenue = db.execute("""SELECT COALESCE(SUM(price), 0) FROM jobs WHERE status = 'Paid'""").fetchone()[0]
     recent_jobs = db.execute("SELECT * FROM jobs ORDER BY id DESC LIMIT 5").fetchall()
+    total_expenses = db.execute("""SELECT COALESCE(SUM(expenses), 0) FROM jobs""").fetchone()[0]
+    total_mileage = db.execute("""SELECT COALESCE(SUM(mileage), 0) FROM jobs""").fetchone()[0]
+    net_profit = total_contract_value - total_expenses
     db.close()
 
     recent_rows = ""
@@ -227,6 +245,21 @@ def dashboard():
                             <h2>${paid_revenue:.2f}</h2>
                         </div>
 
+                        <div class="card">
+                            <h3>Total Expenses</h3>
+                            <h2>${total_expenses:.2f}</h2>
+                        </div>
+
+                        <div class="card">
+                            <h3>Total Mileage</h3>
+                            <h2>{total_mileage}</h2>
+                        </div>
+
+                        <div class="card">
+                            <h3>Net Profit</h3>
+                            <h2>${net_profit:.2f}</h2>
+                        </div>
+
                     </div>
 
                     <div class="section-header">
@@ -266,6 +299,8 @@ def jobs():
 
     for job in jobs:
 
+        profit = (job['price'] or 0) - (job['expenses'] or 0)
+
         status_options = ""
 
         statuses = ['New', 'Accepted', 'In Progress', 'Completed', 'Invoiced', 'Paid']
@@ -293,6 +328,12 @@ def jobs():
             <td>{job['location'] or ''}</td>
 
             <td>${job['price']:.2f}</td>
+
+            <td>${(job['expenses'] or 0):.2f}</td>
+
+            <td>${profit:.2f}</td>
+
+            <td>{(job['mileage'] or 0):.1f}</td>
 
             <td>
 
@@ -404,7 +445,10 @@ def jobs():
                 <th>Client</th>
                 <th>Service</th>
                 <th>Location</th>
-                <th>Price</th>
+                <th>Contract</th>
+                <th>Expenses</th>
+                <th>Profit</th>
+                <th>Mileage</th>
                 <th>Status</th>
                 <th>Actions</th>
             </tr>
@@ -453,12 +497,15 @@ def edit_job(job_id):
         service_type = request.form['service_type']
         location = request.form.get('location', '')
         price = float(request.form.get('price', 0))
+        mileage = request.form.get('mileage', 0)
+        expenses = request.form.get('expenses', 0)
+        notes_financial = request.form.get('notes_financial', '')
 
         db.execute('''
             UPDATE jobs
-            SET client_name = ?, service_type = ?, location = ?, price = ?
+            SET client_name = ?, service_type = ?, location = ?, price = ?, mileage = ?, expenses = ?, notes_financial = ?
             WHERE id = ?
-        ''', (client_name, service_type, location, price, job_id))
+        ''', (client_name, service_type, location, price, mileage, expenses, notes_financial, job_id))
         db.commit()
         db.close()
         return redirect('/jobs')
@@ -502,6 +549,33 @@ def edit_job(job_id):
                 value="{job['price']}"
                 style="width: 100%; padding: 10px; margin: 8px 0 18px;"
             >
+            <label>Business Mileage</label><br>
+            <input
+                type="number"
+                step="0.1"
+                name="mileage"
+                value="{job['mileage']}"
+                style="width: 100%; padding: 10px; margin: 8px 0 18px;"
+                min="0"
+            >
+            <label>Expenses</label><br>
+            <input
+                type="number"
+                step="0.01"
+                name="expenses"
+                value="{job['expenses']}"
+                style="width: 100%; padding: 10px; margin: 8px 0 18px;"
+                min="0"
+            >
+
+            <label>Financial Notes</label><br>
+            <textarea
+                name="notes_financial"
+                style="width: 100%; padding: 10px; margin: 8px 0 18px;"
+                rows="3"
+            >{job['notes_financial'] or ''}</textarea>
+
+
             <button type="submit">
                 Save
             </button>
@@ -531,6 +605,9 @@ def add_job():
         description = request.form.get("description", "")
         location = request.form.get("location", "")
         price = request.form.get("price", 0)
+        mileage = request.form.get("mileage", 0)
+        expenses = request.form.get("expenses", 0)
+        notes_financial = request.form.get("notes_financial", "")
 
         db = get_db()
 
@@ -543,9 +620,9 @@ def add_job():
         client_name = client["company_name"]
 
         db.execute("""
-            INSERT INTO jobs (client_name, client_id, service_type, description, location, price, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (client_name, client_id, service_type, description, location, float(price), 'New'))
+            INSERT INTO jobs (client_name, client_id, service_type, description, location, price, status, mileage, expenses, notes_financial)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (client_name, client_id, service_type, description, location, float(price), 'New', float(mileage), float(expenses), notes_financial))
 
         db.commit()
         db.close()
@@ -708,6 +785,39 @@ def add_job():
                     required
                 >
 
+                <label>
+                    Business Mileage
+                </label>
+
+                <input
+                    name="mileage"
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    value="0"
+                >
+                
+                <label>
+                    Job Expenses
+                </label>
+
+                <input
+                    name="expenses"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value="0"
+                >
+
+                <label>
+                    Financial Notes
+                </label>
+
+                <textarea
+                    name="notes_financial"
+                    rows="3"
+                    placeholder="Fuel, parking, tolls, supplies, subcontractor costs, etc."
+                ></textarea>
 
                 <button type="submit">
 
