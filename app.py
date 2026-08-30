@@ -292,16 +292,115 @@ def dashboard():
 def financials():
     db = get_db()
 
-    total_contract_value = db.execute("""SELECT COALESCE(SUM(price), 0) FROM jobs""").fetchone()[0]
-    paid_revenue = db.execute("""SELECT COALESCE(SUM(price), 0) FROM jobs WHERE status = 'Paid'""").fetchone()[0]
-    total_expenses = db.execute("""SELECT COALESCE(SUM(expenses), 0) FROM jobs""").fetchone()[0]
-    total_mileage = db.execute("""SELECT COALESCE(SUM(mileage), 0) FROM jobs""").fetchone()[0]
+    selected_month = request.args.get("month","")
+    selected_year = request.args.get("year","")
+
+    conditions = []
+    params = []
+
+    if selected_year:
+        conditions.append("substr(job_date, 1, 4) = ?")
+        params.append(selected_year)
+
+    if selected_month:
+        conditions.append("substr(job_date, 6, 2) = ?")
+        params.append(selected_month)
+
+    where_clause = ""
+
+    if conditions:
+        where_clause = "WHERE " + " AND ".join(conditions)
+
+
+    total_contract_value = db.execute(f"""SELECT COALESCE(SUM(price), 0) FROM jobs {where_clause}""", params).fetchone()[0]
+
+    paid_where = conditions.copy()
+    paid_params = params.copy()
+
+    paid_where.append("status = ?")
+    paid_params.append("Paid")
+
+    paid_where_clause = "WHERE " + " AND ".join(paid_where)
+
+    paid_revenue = db.execute(f"""SELECT COALESCE(SUM(price), 0) FROM jobs {paid_where_clause}""", paid_params).fetchone()[0]
+
+    total_expenses = db.execute(f"""SELECT COALESCE(SUM(expenses), 0) FROM jobs {where_clause}""", params).fetchone()[0]
+
+    total_mileage = db.execute(f"""SELECT COALESCE(SUM(mileage), 0) FROM jobs {where_clause}""", params).fetchone()[0]
+
+
+    ytd_contract_value = db.execute("""
+        SELECT COALESCE(SUM(price), 0)
+        FROM jobs
+        WHERE job_date IS NOT NULL
+            AND job_date != ''
+            AND substr(job_date, 1, 4) = ?
+    """, (selected_year or "2026",)).fetchone()[0]
+
+    ytd_expenses = db.execute("""
+        SELECT COALESCE(SUM(expenses), 0)
+        FROM jobs
+        WHERE job_date IS NOT NULL
+            AND job_date != ''
+            AND substr(job_date, 1, 4) = ?
+    """, (selected_year or "2026",)).fetchone()[0]
+
+    ytd_mileage = db.execute("""
+        SELECT COALESCE(SUM(mileage), 0)
+        FROM jobs
+        WHERE job_date IS NOT NULL
+            AND job_date != ''
+            AND substr(job_date, 1, 4) = ?
+    """, (selected_year or "2026",)).fetchone()[0]
+
+    ytd_profit = ytd_contract_value - ytd_expenses
+
+    monthly_query = """
+        SELECT
+            substr(job_date, 1, 7) AS month,
+            COALESCE(SUM(price), 0) AS contract_value,
+            COALESCE(SUM(expenses), 0) AS expenses,
+            COALESCE(SUM(price - expenses), 0) AS profit,
+            COALESCE(SUM(mileage), 0) AS mileage
+        FROM jobs
+        WHERE job_date IS NOT NULL
+            AND job_date != ''
+    """
+
+    monthly_params = []
+
+    if selected_year:
+        monthly_query += " AND substr(job_date, 1, 4) = ?"
+        monthly_params.append(selected_year)
+
+    if selected_month:
+        monthly_query += " AND substr(job_date, 6, 2) = ?"
+        monthly_params.append(selected_month)
+
+    monthly_query += """
+        GROUP BY substr(job_date, 1, 7)
+        ORDER BY month DESC
+    """
+
+    monthly_rows = db.execute(monthly_query, monthly_params).fetchall()
     
+    outstanding_revenue = total_contract_value - paid_revenue
+    net_profit = total_contract_value - total_expenses
 
     db.close()
 
-    outstanding_revenue = total_contract_value - paid_revenue
-    net_profit = total_contract_value - total_expenses
+    monthly_table_rows = ""
+
+    for row in monthly_rows:
+        monthly_table_rows += f"""
+        <tr>
+            <td>{row[0]}</td>
+            <td>${row[1]:.2f}</td>
+            <td>${row[2]:.2f}</td>
+            <td>${row[3]:.2f}</td>
+            <td>{row[4]:.1f}</td>
+        </tr>
+        """
 
     if total_contract_value > 0:
         profit_margin = (net_profit / total_contract_value) * 100
@@ -361,6 +460,47 @@ def financials():
                 margin-bottom: 0;
             }}
 
+            <h2 style="margin-top: 40px;">Monthly Financial Summary</h2>
+
+            <table style="width: 100%; background: white; border-collapse: collapse">
+                <tr style="background: #111827; color: white;">
+                    <th style="padding: 12px;">Month</th>
+                    <th style="padding: 12px;">Contract Value</th>
+                    <th style="padding: 12px;">Expenses</th>
+                    <th style="padding: 12px;">Profit</th>
+                    <th style="padding: 12px;">Mileage</th>
+                </tr>
+                
+                {monthly_table_rows}
+            
+            </table>
+
+            <h2 style="margin-top: 40px;">Year-to-Date Financial Summary</h2>
+
+            <div class="cards">
+
+                <div class="card">
+                    <h3>Contract Value</h3>
+                    <h2>${ytd_contract_value:.2f}</h2>
+                </div>
+
+                <div class="card">
+                    <h3>Total Expenses</h3>
+                    <h2>${ytd_expenses:.2f}</h2>
+                </div>
+
+                <div class="card">
+                    <h3>Net Profit</h3>
+                    <h2>${ytd_profit:.2f}</h2>
+                </div>
+
+                <div class="card">
+                    <h3>Business Mileage</h3>
+                    <h2>{ytd_mileage:.1f}</h2>
+                </div>
+
+            </div>
+
         </style>
     </head>
     <body>
@@ -375,6 +515,36 @@ def financials():
             <h1>Financials</h1>
 
             <p>Contractor revenue, expenses, and profit overview</p>
+
+            <form method="GET" action="/financials" style="margin-bottom: 25px;">
+                <label>Year</label>
+                <select name="year">
+                    <option value="">All Years</option>
+                    <option value="2026" {"selected" if selected_year == "2026" else ""}>2026</option>
+                    <option value="2027" {"selected" if selected_year == "2027" else ""}>2027</option>
+                </select>
+
+                &nbsp;
+
+                <label>Month</label>
+                <select name="month">
+                    <option value="">All Months</option>
+                    <option value="01" {"selected" if selected_month == "01" else ""}>January</option>
+                    <option value="02" {"selected" if selected_month == "02" else ""}>February</option>
+                    <option value="03" {"selected" if selected_month == "03" else ""}>March</option>
+                    <option value="04" {"selected" if selected_month == "04" else ""}>April</option>
+                    <option value="05" {"selected" if selected_month == "05" else ""}>May</option>
+                    <option value="06" {"selected" if selected_month == "06" else ""}>June</option>
+                    <option value="07" {"selected" if selected_month == "07" else ""}>July</option>
+                    <option value="08" {"selected" if selected_month == "08" else ""}>August</option>
+                    <option value="09" {"selected" if selected_month == "09" else ""}>September</option>
+                    <option value="10" {"selected" if selected_month == "10" else ""}>October</option>
+                    <option value="11" {"selected" if selected_month == "11" else ""}>November</option>
+                    <option value="12" {"selected" if selected_month == "12" else ""}>December</option>
+                </select>
+                &nbsp;
+                <button type="submit">Filter</button>
+            </form>
 
             <div class="cards">
 
@@ -412,11 +582,48 @@ def financials():
                     <h3>Business Mileage</h3>
                     <h2>{total_mileage:.1f}</h2>
                 </div>
-            
+
             </div>
 
-        </div>
+                <h2 style="margin-top: 40px;">Monthly Financial Summary</h2>
 
+                <table style="width: 100%; background: white; border-collapse: collapse">
+                    <tr style="background: #111827; color: white;">
+                        <th style="padding: 12px;">Month</th>
+                        <th style="padding: 12px;">Contract Value</th>
+                        <th style="padding: 12px;">Expenses</th>
+                        <th style="padding: 12px;">Profit</th>
+                        <th style="padding: 12px;">Mileage</th>
+                    </tr>
+                    
+                    {monthly_table_rows}
+                </table>
+
+                <h2 style="margin-top: 40px;">Year-to-Date Summary</h2>
+
+                <div class="cards">
+
+                    <div class="card">
+                        <h3>Contract Value</h3>
+                        <h2>${ytd_contract_value:.2f}</h2>
+                    </div>
+
+                    <div class="card">
+                        <h3>YTD Expenses</h3>
+                        <h2>${ytd_expenses:.2f}</h2>
+                    </div>
+
+                    <div class="card">
+                        <h3>YTD Profit</h3>
+                        <h2>${ytd_profit:.2f}</h2>
+                    </div>
+
+                    <div class="card">
+                        <h3>Business Mileage</h3>
+                        <h2>{ytd_mileage:.1f}</h2>
+                    </div>
+
+                </div>        
     </body>
     </html>
     """
@@ -459,6 +666,8 @@ def jobs():
             <td>{job['service_type']}</td>
 
             <td>{job['location'] or ''}</td>
+
+            <td>{job['job_date'] or ''}</td>
 
             <td>${job['price']:.2f}</td>
 
@@ -578,6 +787,7 @@ def jobs():
                 <th>Client</th>
                 <th>Service</th>
                 <th>Location</th>
+                <th>Job Date</th>
                 <th>Contract</th>
                 <th>Expenses</th>
                 <th>Profit</th>
@@ -633,12 +843,13 @@ def edit_job(job_id):
         mileage = request.form.get('mileage', 0)
         expenses = request.form.get('expenses', 0)
         notes_financial = request.form.get('notes_financial', '')
+        job_date = request.form.get('job_date', '')
 
         db.execute('''
             UPDATE jobs
-            SET client_name = ?, service_type = ?, location = ?, price = ?, mileage = ?, expenses = ?, notes_financial = ?
+            SET client_name = ?, service_type = ?, location = ?, price = ?, mileage = ?, expenses = ?, notes_financial = ?, job_date = ?
             WHERE id = ?
-        ''', (client_name, service_type, location, price, mileage, expenses, notes_financial, job_id))
+        ''', (client_name, service_type, location, price, mileage, expenses, notes_financial, job_date, job_id))
         db.commit()
         db.close()
         return redirect('/jobs')
@@ -672,6 +883,13 @@ def edit_job(job_id):
             <input
                 name="location"
                 value="{job['location'] or ''}"
+                style="width: 100%; padding: 10px; margin: 8px 0 18px;"
+            >
+            <label>Job Date</label><br>
+            <input
+                type="date"
+                name="job_date"
+                value="{job['job_date'] or ''}"
                 style="width: 100%; padding: 10px; margin: 8px 0 18px;"
             >
             <label>Contract Amount</label><br>
@@ -741,6 +959,7 @@ def add_job():
         mileage = request.form.get("mileage", 0)
         expenses = request.form.get("expenses", 0)
         notes_financial = request.form.get("notes_financial", "")
+        job_date = request.form.get("job_date", "")
 
         db = get_db()
 
@@ -753,9 +972,9 @@ def add_job():
         client_name = client["company_name"]
 
         db.execute("""
-            INSERT INTO jobs (client_name, client_id, service_type, description, location, price, status, mileage, expenses, notes_financial)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (client_name, client_id, service_type, description, location, float(price), 'New', float(mileage), float(expenses), notes_financial))
+            INSERT INTO jobs (client_name, client_id, service_type, description, location, price, status, mileage, expenses, notes_financial, job_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (client_name, client_id, service_type, description, location, float(price), 'New', float(mileage), float(expenses), notes_financial, job_date))
 
         db.commit()
         db.close()
@@ -905,6 +1124,16 @@ def add_job():
 
                 <input
                     name="location"
+                >
+
+                <label>
+                    Job Date
+                </label>
+
+                <input
+                    name="job_date"
+                    type="date"
+                    required
                 >
 
                 <label>
