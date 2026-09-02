@@ -307,8 +307,8 @@ def dashboard():
 def financials():
     db = get_db()
 
-    selected_month = request.args.get("month","")
-    selected_year = request.args.get("year","")
+    selected_month = request.args.get("month", "")
+    selected_year = request.args.get("year", "")
 
     conditions = []
     params = []
@@ -339,7 +339,30 @@ def financials():
 
     paid_revenue = db.execute(f"""SELECT COALESCE(SUM(price), 0) FROM jobs {paid_where_clause}""", paid_params).fetchone()[0]
 
-    total_expenses = db.execute(f"""SELECT COALESCE(SUM(expenses), 0) FROM jobs {where_clause}""", params).fetchone()[0]
+    expense_conditions = []
+    expense_params = []
+
+    if selected_year:
+        expense_conditions.append("substr(expense_date, 1, 4) = ?")
+        expense_params.append(selected_year)
+
+    if selected_month:
+        expense_conditions.append("substr(expense_date, 6, 2) = ?")
+        expense_params.append(selected_month)
+
+    expense_where_clause = ""
+
+    if expense_conditions:
+        expense_where_clause = "WHERE " + " AND ".join(expense_conditions)
+
+    total_expenses = db.execute(
+        f"""
+        SELECT COALESCE(SUM(amount), 0)
+        FROM expenses
+        {expense_where_clause}
+        """,
+        expense_params
+    ).fetchone()[0]
 
     total_mileage = db.execute(f"""SELECT COALESCE(SUM(mileage), 0) FROM jobs {where_clause}""", params).fetchone()[0]
 
@@ -353,11 +376,11 @@ def financials():
     """, (selected_year or "2026",)).fetchone()[0]
 
     ytd_expenses = db.execute("""
-        SELECT COALESCE(SUM(expenses), 0)
-        FROM jobs
-        WHERE job_date IS NOT NULL
-            AND job_date != ''
-            AND substr(job_date, 1, 4) = ?
+    SELECT COALESCE(SUM(amount), 0)
+    FROM expenses
+    WHERE expense_date IS NOT NULL
+        AND expense_date != ''
+        AND substr(expense_date, 1, 4) = ?
     """, (selected_year or "2026",)).fetchone()[0]
 
     ytd_mileage = db.execute("""
@@ -397,7 +420,61 @@ def financials():
         ORDER BY month DESC
     """
 
-    monthly_rows = db.execute(monthly_query, monthly_params).fetchall()
+    monthly_query = """
+    SELECT
+        month,
+        SUM(contract_value) AS contract_value,
+        SUM(expenses) AS expenses,
+        SUM(contract_value) - SUM(expenses) AS profit,
+        SUM(mileage) AS mileage
+    FROM (
+        SELECT
+            substr(job_date, 1, 7) AS month,
+            COALESCE(SUM(price), 0) AS contract_value,
+            0 AS expenses,
+            COALESCE(SUM(mileage), 0) AS mileage
+        FROM jobs
+        WHERE job_date IS NOT NULL
+          AND job_date != ''
+        GROUP BY substr(job_date, 1, 7)
+
+        UNION ALL
+
+        SELECT
+            substr(expense_date, 1, 7) AS month,
+            0 AS contract_value,
+            COALESCE(SUM(amount), 0) AS expenses,
+            0 AS mileage
+        FROM expenses
+        WHERE expense_date IS NOT NULL
+          AND expense_date != ''
+        GROUP BY substr(expense_date, 1, 7)
+        )
+        WHERE 1=1
+    """
+
+    monthly_params = []
+
+    monthly_year = request.args.get("year", "")
+    monthly_month = request.args.get("month", "")
+
+    if monthly_year:
+        monthly_query += " AND substr(month, 1, 4) = ?"
+        monthly_params.append(monthly_year)
+
+    if monthly_month:
+        monthly_query += " AND substr(month, 6, 2) = ?"
+        monthly_params.append(monthly_month)
+
+    monthly_query += """
+        GROUP BY month
+        ORDER BY month DESC
+    """
+
+    monthly_rows = db.execute(
+        monthly_query,
+        monthly_params
+    ).fetchall()
     
     outstanding_revenue = total_contract_value - paid_revenue
     net_profit = total_contract_value - total_expenses
@@ -647,14 +724,25 @@ def financials():
 def jobs():
 
     db = get_db()
-    jobs = db.execute("SELECT * FROM jobs ORDER BY id DESC").fetchall()
+    jobs = db.execute("""
+    SELECT
+        jobs.*,
+        COALESCE((
+            SELECT SUM(expenses.amount)
+            FROM expenses
+            WHERE expenses.job_id = jobs.id
+        ), 0) AS ledger_expenses
+    FROM jobs
+    ORDER BY jobs.id DESC
+    """).fetchall()
     db.close()
 
     job_rows = ""
 
     for job in jobs:
 
-        profit = (job['price'] or 0) - (job['expenses'] or 0)
+        job_expenses = job["ledger_expenses"] or 0
+        profit = (job["price"] or 0) - job_expenses
 
         status_options = ""
 
@@ -686,7 +774,7 @@ def jobs():
 
             <td>${job['price']:.2f}</td>
 
-            <td>${(job['expenses'] or 0):.2f}</td>
+            <td>${job_expenses:,.2f}</td>
 
             <td>${profit:.2f}</td>
 
@@ -713,11 +801,11 @@ def jobs():
             </td>
             <td>
 
-                <a href="/jobs/{job['id']}/edit">
-                    Edit
-                </a>
+                <a href="/jobs/{job['id']}/edit">Edit</a>
+                <br>
 
-                &nbsp;
+                <a href="/expenses/add?job_id={job['id']}">+ Expense</a>
+                <br>
 
                 <form
                     method="POST"
@@ -1048,13 +1136,20 @@ def add_expense():
         ORDER BY id DESC
     """).fetchall()
 
+    selected_job_id = request.args.get("job_id")
+
     job_options = """
         <option value="">General Business Expense — No Job</option>
     """
 
     for job in jobs:
+        selected = ""
+
+        if selected_job_id and str(job["id"]) == selected_job_id:
+            selected = "selected"
+
         job_options += f"""
-        <option value="{job['id']}">
+        <option value="{job['id']}" {selected}>
             Job #{job['id']} — {job['client_name']} — {job['service_type']}
         </option>
         """
@@ -1504,15 +1599,14 @@ def edit_job(job_id):
         location = request.form.get('location', '')
         price = float(request.form.get('price', 0))
         mileage = request.form.get('mileage', 0)
-        expenses = request.form.get('expenses', 0)
         notes_financial = request.form.get('notes_financial', '')
         job_date = request.form.get('job_date', '')
 
         db.execute('''
             UPDATE jobs
-            SET client_name = ?, service_type = ?, location = ?, price = ?, mileage = ?, expenses = ?, notes_financial = ?, job_date = ?
+            SET client_name = ?, service_type = ?, location = ?, price = ?, mileage = ?, notes_financial = ?, job_date = ?
             WHERE id = ?
-        ''', (client_name, service_type, location, price, mileage, expenses, notes_financial, job_date, job_id))
+        ''', (client_name, service_type, location, price, mileage, notes_financial, job_date, job_id))
         db.commit()
         db.close()
         return redirect('/jobs')
@@ -1572,16 +1666,6 @@ def edit_job(job_id):
                 style="width: 100%; padding: 10px; margin: 8px 0 18px;"
                 min="0"
             >
-            <label>Expenses</label><br>
-            <input
-                type="number"
-                step="0.01"
-                name="expenses"
-                value="{job['expenses']}"
-                style="width: 100%; padding: 10px; margin: 8px 0 18px;"
-                min="0"
-            >
-
             <label>Financial Notes</label><br>
             <textarea
                 name="notes_financial"
@@ -1620,7 +1704,6 @@ def add_job():
         location = request.form.get("location", "")
         price = request.form.get("price", 0)
         mileage = request.form.get("mileage", 0)
-        expenses = request.form.get("expenses", 0)
         notes_financial = request.form.get("notes_financial", "")
         job_date = request.form.get("job_date", "")
 
@@ -1635,9 +1718,9 @@ def add_job():
         client_name = client["company_name"]
 
         db.execute("""
-            INSERT INTO jobs (client_name, client_id, service_type, description, location, price, status, mileage, expenses, notes_financial, job_date)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (client_name, client_id, service_type, description, location, float(price), 'New', float(mileage), float(expenses), notes_financial, job_date))
+            INSERT INTO jobs (client_name, client_id, service_type, description, location, price, status, mileage, notes_financial, job_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (client_name, client_id, service_type, description, location, float(price), 'New', float(mileage), notes_financial, job_date))
 
         db.commit()
         db.close()
