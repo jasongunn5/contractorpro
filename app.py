@@ -53,6 +53,21 @@ def create_database():
         notes TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
+
+    db.execute("""CREATE TABLE IF NOT EXISTS expenses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        expense_date TEXT NOT NULL,
+        category TEXT NOT NULL,
+        description TEXT,
+        amount REAL NOT NULL DEFAULT 0,
+        job_id INTEGER,
+        vendor TEXT,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (job_id) REFERENCES jobs (id)
+    )""")
+    
+
     db.commit()
     db.close()
 
@@ -805,24 +820,672 @@ def jobs():
     </html>
     """
 
-
-@app.route('/jobs/<int:job_id>/status', methods=['POST'])
-def update_job_status(job_id):
-    new_status = request.form.get('status')
-
-    alowed_statuses = ['New', 'Accepted', 'In Progress', 'Completed', 'Invoiced', 'Paid']
-
-    if new_status not in alowed_statuses:
-        return "Invalid status", 400
-
+@app.route("/expenses")
+def expenses():
     db = get_db()
 
-    db.execute('UPDATE jobs SET status = ? WHERE id = ?', (new_status, job_id))
+    expense_rows = db.execute("""
+        SELECT
+            expenses.*,
+            jobs.client_name,
+            jobs.service_type
+        FROM expenses
+        LEFT JOIN jobs ON expenses.job_id = jobs.id
+        ORDER BY expense_date DESC, expenses.id DESC
+    """).fetchall()
+
+    total_expenses = db.execute("""
+        SELECT COALESCE(SUM(amount), 0)
+        FROM expenses
+    """).fetchone()[0]
+
+    db.close()
+
+    rows = ""
+
+    for expense in expense_rows:
+        linked_job = ""
+
+        if expense["job_id"]:
+            linked_job = f"Job #{expense['job_id']}"
+
+        rows += f"""
+        <tr>
+            <td>{expense['expense_date']}</td>
+            <td>{expense['category']}</td>
+            <td>{expense['description'] or ''}</td>
+            <td>{expense['vendor'] or ''}</td>
+            <td>{linked_job}</td>
+            <td>${expense['amount']:,.2f}</td>
+            <td>
+                <a href="/expenses/{expense['id']}/edit">Edit</a>
+                &nbsp;
+
+                <form
+                    method="POST"
+                    action="/expenses/{expense['id']}/delete"
+                    style="display:inline;"
+                    onsubmit="return confirm('Delete this expense?');"
+                >
+                    <button type="submit">Delete</button>
+                </form>
+            </td>
+        </tr>
+        """
+
+    if not rows:
+        rows = """
+        <tr>
+            <td colspan="7" style="text-align:center; padding:20px;">
+                No expenses have been recorded yet.
+            </td>
+        </tr>
+        """
+
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>ContractorPro Expenses</title>
+
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                background: #f4f6f8;
+                margin: 0;
+            }}
+
+            nav {{
+                background: #111827;
+                padding: 18px 30px;
+            }}
+
+            nav a {{
+                color: white;
+                text-decoration: none;
+                margin-right: 25px;
+            }}
+
+            .container {{
+                width: 900px;
+                max-width: 90%;
+                margin: 40px auto;
+            }}
+
+            .summary-card {{
+                background: white;
+                padding: 20px;
+                border-radius: 8px;
+                margin-bottom: 30px;
+                box-shadow: 0 2px 8px rgba(0,0,0,.08);
+            }}
+
+            table {{
+                width: 100%;
+                border-collapse: collapse;
+                background: white;
+            }}
+
+            th {{
+                background: #111827;
+                color: white;
+                padding: 12px;
+                text-align: left;
+            }}
+
+            td {{
+                padding: 12px;
+                border-bottom: 1px solid #ddd;
+            }}
+
+            .new-expense {{
+                display: inline-block;
+                background: #16a34a;
+                color: white;
+                padding: 10px 16px;
+                text-decoration: none;
+                border-radius: 5px;
+                margin-bottom: 20px;
+            }}
+        </style>
+    </head>
+
+    <body>
+
+        <nav>
+            <a href="/">Dashboard</a>
+            <a href="/jobs">Jobs</a>
+            <a href="/clients">Clients</a>
+            <a href="/financials">Financials</a>
+            <a href="/expenses">Expenses</a>
+        </nav>
+
+        <div class="container">
+
+            <h1>Business Expenses</h1>
+
+            <p>
+                Track deductible business expenses and job-related costs.
+            </p>
+
+            <a href="/expenses/add" class="new-expense">
+                + New Expense
+            </a>
+
+            <div class="summary-card">
+                <h3>Total Recorded Expenses</h3>
+                <h2>${total_expenses:,.2f}</h2>
+            </div>
+
+            <table>
+                <tr>
+                    <th>Date</th>
+                    <th>Category</th>
+                    <th>Description</th>
+                    <th>Vendor</th>
+                    <th>Job</th>
+                    <th>Amount</th>
+                    <th>Actions</th>
+                </tr>
+
+                {rows}
+
+            </table>
+
+        </div>
+
+    </body>
+    </html>
+    """
+
+@app.route("/expenses/add", methods=["GET", "POST"])
+def add_expense():
+    db = get_db()
+
+    if request.method == "POST":
+        expense_date = request.form["expense_date"]
+        category = request.form["category"]
+        description = request.form.get("description", "")
+        vendor = request.form.get("vendor", "")
+        amount = float(request.form["amount"])
+        job_id = request.form.get("job_id")
+        notes = request.form.get("notes", "")
+
+        if not job_id:
+            job_id = None
+        else:
+            job_id = int(job_id)
+
+        db.execute("""
+            INSERT INTO expenses (
+                expense_date,
+                category,
+                description,
+                amount,
+                job_id,
+                vendor,
+                notes
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            expense_date,
+            category,
+            description,
+            amount,
+            job_id,
+            vendor,
+            notes
+        ))
+
+        db.commit()
+        db.close()
+
+        return redirect("/expenses")
+
+    jobs = db.execute("""
+        SELECT id, client_name, service_type
+        FROM jobs
+        ORDER BY id DESC
+    """).fetchall()
+
+    job_options = """
+        <option value="">General Business Expense — No Job</option>
+    """
+
+    for job in jobs:
+        job_options += f"""
+        <option value="{job['id']}">
+            Job #{job['id']} — {job['client_name']} — {job['service_type']}
+        </option>
+        """
+
+    db.close()
+
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Add Expense - ContractorPro</title>
+
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                background: #f4f6f8;
+                margin: 0;
+            }}
+
+            nav {{
+                background: #111827;
+                padding: 18px 30px;
+            }}
+
+            nav a {{
+                color: white;
+                text-decoration: none;
+                margin-right: 25px;
+            }}
+
+            .container {{
+                width: 700px;
+                max-width: 90%;
+                margin: 40px auto;
+            }}
+
+            .form-card {{
+                background: white;
+                padding: 30px;
+                border-radius: 8px;
+                box-shadow: 0 2px 8px rgba(0,0,0,.08);
+            }}
+
+            label {{
+                display: block;
+                font-weight: bold;
+                margin-top: 18px;
+                margin-bottom: 7px;
+            }}
+
+            input, select, textarea {{
+                width: 100%;
+                box-sizing: border-box;
+                padding: 11px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+            }}
+
+            textarea {{
+                min-height: 90px;
+            }}
+
+            button {{
+                background: #16a34a;
+                color: white;
+                border: none;
+                padding: 12px 20px;
+                border-radius: 5px;
+                margin-top: 22px;
+                cursor: pointer;
+            }}
+        </style>
+    </head>
+
+    <body>
+
+        <nav>
+            <a href="/">Dashboard</a>
+            <a href="/jobs">Jobs</a>
+            <a href="/clients">Clients</a>
+            <a href="/financials">Financials</a>
+            <a href="/expenses">Expenses</a>
+        </nav>
+
+        <div class="container">
+
+            <h1>Add Business Expense</h1>
+
+            <div class="form-card">
+
+                <form method="POST">
+
+                    <label>Expense Date</label>
+                    <input
+                        type="date"
+                        name="expense_date"
+                        required
+                    >
+
+                    <label>Category</label>
+                    <select name="category" required>
+                        <option value="">Select Category</option>
+                        <option value="Fuel">Fuel</option>
+                        <option value="Vehicle Maintenance">Vehicle Maintenance</option>
+                        <option value="Parking & Tolls">Parking & Tolls</option>
+                        <option value="Supplies">Supplies</option>
+                        <option value="Equipment">Equipment</option>
+                        <option value="Software">Software</option>
+                        <option value="Insurance">Insurance</option>
+                        <option value="Subcontractor">Subcontractor</option>
+                        <option value="Advertising">Advertising</option>
+                        <option value="Professional Services">Professional Services</option>
+                        <option value="Travel">Travel</option>
+                        <option value="Meals">Meals</option>
+                        <option value="Other">Other</option>
+                    </select>
+
+                    <label>Description</label>
+                    <input
+                        type="text"
+                        name="description"
+                        placeholder="Example: Fuel for delivery route"
+                    >
+
+                    <label>Vendor</label>
+                    <input
+                        type="text"
+                        name="vendor"
+                        placeholder="Example: Chevron"
+                    >
+
+                    <label>Amount</label>
+                    <input
+                        type="number"
+                        name="amount"
+                        min="0"
+                        step="0.01"
+                        required
+                    >
+
+                    <label>Associated Job</label>
+                    <select name="job_id">
+                        {job_options}
+                    </select>
+
+                    <label>Notes</label>
+                    <textarea
+                        name="notes"
+                        placeholder="Optional expense notes"
+                    ></textarea>
+
+                    <button type="submit">
+                        Save Expense
+                    </button>
+
+                </form>
+
+            </div>
+
+        </div>
+
+    </body>
+    </html>
+    """
+
+@app.route("/expenses/<int:expense_id>/delete", methods=["POST"])
+def delete_expense(expense_id):
+    db = get_db()
+
+    db.execute(
+        "DELETE FROM expenses WHERE id = ?",
+        (expense_id,)
+    )
 
     db.commit()
     db.close()
 
-    return redirect('/jobs')
+    return redirect("/expenses")
+
+
+@app.route("/expenses/<int:expense_id>/edit", methods=["GET", "POST"])
+def edit_expense(expense_id):
+    db = get_db()
+
+    expense = db.execute(
+        "SELECT * FROM expenses WHERE id = ?",
+        (expense_id,)
+    ).fetchone()
+
+    if expense is None:
+        db.close()
+        return "Expense not found", 404
+
+    if request.method == "POST":
+        expense_date = request.form["expense_date"]
+        category = request.form["category"]
+        description = request.form.get("description", "")
+        vendor = request.form.get("vendor", "")
+        amount = float(request.form["amount"])
+        job_id = request.form.get("job_id")
+        notes = request.form.get("notes", "")
+
+        if not job_id:
+            job_id = None
+        else:
+            job_id = int(job_id)
+
+        db.execute("""
+            UPDATE expenses
+            SET expense_date = ?,
+                category = ?,
+                description = ?,
+                vendor = ?,
+                amount = ?,
+                job_id = ?,
+                notes = ?
+            WHERE id = ?
+        """, (
+            expense_date,
+            category,
+            description,
+            vendor,
+            amount,
+            job_id,
+            notes,
+            expense_id
+        ))
+
+        db.commit()
+        db.close()
+
+        return redirect("/expenses")
+
+    jobs = db.execute("""
+        SELECT id, client_name, service_type
+        FROM jobs
+        ORDER BY id DESC
+    """).fetchall()
+
+    job_options = """
+        <option value="">General Business Expense — No Job</option>
+    """
+
+    for job in jobs:
+        selected = ""
+
+        if expense["job_id"] == job["id"]:
+            selected = "selected"
+
+        job_options += f"""
+        <option value="{job['id']}" {selected}>
+            Job #{job['id']} — {job['client_name']} — {job['service_type']}
+        </option>
+        """
+
+    db.close()
+
+
+    categories = [
+        "Fuel",
+        "Vehicle Maintenance",
+        "Parking & Tolls",
+        "Supplies",
+        "Equipment",
+        "Software",
+        "Insurance",
+        "Subcontractor",
+        "Advertising",
+        "Professional Services",
+        "Travel",
+        "Meals",
+        "Other"
+    ]
+
+    category_options = ""
+
+    for category in categories:
+        selected = "selected" if expense["category"] == category else ""
+
+        category_options += f"""
+        <option value="{category}" {selected}>{category}</option>
+        """
+
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Edit Expense - ContractorPro</title>
+
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                background: #f4f6f8;
+                margin: 0;
+            }}
+
+            nav {{
+                background: #111827;
+                padding: 18px 30px;
+            }}
+
+            nav a {{
+                color: white;
+                text-decoration: none;
+                margin-right: 25px;
+            }}
+
+            .container {{
+                width: 700px;
+                max-width: 90%;
+                margin: 40px auto;
+            }}
+
+            .form-card {{
+                background: white;
+                padding: 30px;
+                border-radius: 8px;
+                box-shadow: 0 2px 8px rgba(0,0,0,.08);
+            }}
+
+            label {{
+                display: block;
+                font-weight: bold;
+                margin-top: 18px;
+                margin-bottom: 7px;
+            }}
+
+            input, select, textarea {{
+                width: 100%;
+                box-sizing: border-box;
+                padding: 11px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+            }}
+
+            textarea {{
+                min-height: 90px;
+            }}
+
+            button {{
+                background: #16a34a;
+                color: white;
+                border: none;
+                padding: 12px 20px;
+                border-radius: 5px;
+                margin-top: 22px;
+                cursor: pointer;
+            }}
+        </style>
+    </head>
+
+    <body>
+
+        <nav>
+            <a href="/">Dashboard</a>
+            <a href="/jobs">Jobs</a>
+            <a href="/clients">Clients</a>
+            <a href="/financials">Financials</a>
+            <a href="/expenses">Expenses</a>
+        </nav>
+
+        <div class="container">
+
+            <h1>Edit Business Expense</h1>
+
+            <div class="form-card">
+
+                <form method="POST">
+
+                    <label>Expense Date</label>
+                    <input
+                        type="date"
+                        name="expense_date"
+                        value="{expense['expense_date']}"
+                        required
+                    >
+
+                    <label>Category</label>
+                    <select name="category" required>
+                        {category_options}
+                    </select>
+
+                    <label>Description</label>
+                    <input
+                        type="text"
+                        name="description"
+                        value="{expense['description'] or ''}"
+                    >
+
+                    <label>Vendor</label>
+                    <input
+                        type="text"
+                        name="vendor"
+                        value="{expense['vendor'] or ''}"
+                    >
+
+                    <label>Amount</label>
+                    <input
+                        type="number"
+                        name="amount"
+                        min="0"
+                        step="0.01"
+                        value="{expense['amount']}"
+                        required
+                    >
+
+                    <label>Associated Job</label>
+                    <select name="job_id">
+                        {job_options}
+                    </select>
+
+                    <label>Notes</label>
+                    <textarea name="notes">{expense['notes'] or ''}</textarea>
+
+                    <button type="submit">
+                        Save Changes
+                    </button>
+
+                </form>
+
+                <p>
+                    <a href="/expenses">Back to Expenses</a>
+                </p>
+
+            </div>
+
+        </div>
+
+    </body>
+    </html>
+    """
 
 
 @app.route('/jobs/<int:job_id>/edit', methods=['GET', 'POST'])
